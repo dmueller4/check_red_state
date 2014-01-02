@@ -87,6 +87,7 @@ my $line_date = "";
 
 my $red_id = '';
 my $red_ip = '';
+my $red_uptime = '';
 my @red_connected_since = '';
 my $red_connected_since_min = 0;
 my $red_status = '';
@@ -94,7 +95,7 @@ my $red_uplink = '';
 my $red_lping = '';
 
 my $result = UNKNOWN;
-my $version = 'V1.1e/2014-02-01/dm';
+my $version = 'V1.1f/2014-02-01/dm';
 my $printversion = 0;
 my $verbose = 0;
 my $help = 0;
@@ -162,44 +163,34 @@ if (length($cmd_scp) =~ 0 or $cmd_scp =~ /Warning: Permanently added/ or $cmd_sc
    print " file info $tmpdir/red_state_$red_id  time: $line_time  date: $line_date\n" if ($verbose);
    
    if (($line !~ /cannot access/i) and ($line !~ /No such file or directory/i)) {
-      my $time_now = time();
-      my @red_time = split(/:/,$line_time);
-      my @red_day = split(/-/,$line_date);
-      my $time_red = timelocal(0,$red_time[1],$red_time[0],$red_day[2],$red_day[1]-1,$red_day[0]-1900);
-      $red_connected_since_min = int(($time_now - $time_red)/60);
-      $red_connected_since[2] = int($red_connected_since_min%60); # min
-      $uptime = "${red_connected_since[2]}min";
-      $red_connected_since[1] = floor(($red_connected_since_min/60)%24); #hours
-      $red_connected_since[0] = floor($red_connected_since_min/1440); # day
-      $uptime = "${red_connected_since[1]}h $uptime" if (floor($red_connected_since[1] >0));
-      $uptime = "${red_connected_since[0]}d $uptime" if (floor($red_connected_since[0] >0));
-      print " time now: $time_now - RED connection time $red_connected_since_min\n" if ($verbose);
-     
       if (`ls -s $tmpdir/red_state_$red_id` !~ /^0/i) { # file found
          my $hashref;
          $hashref = retrieve("$tmpdir/red_state_$red_id");
          $red_ip = $hashref->{'peer'};
          $red_status = $hashref->{'status'};
          $red_uplink = $hashref->{'uplink'};
+         if (length($red_uplink) eq 0) {
+            $red_uplink = "#";
+         }
          $red_lping = localtime($hashref->{'lastping'});
-         print " red connectet via $red_uplink, last contact was $red_lping" if ($verbose);
+         print " RED connectet via $red_uplink, last contact was $red_lping\n" if ($verbose);
 
          `rm -rf $tmpdir/red_state_$red_id`;
          
         if ($red_status eq "online") {
             $result = OK;
-            $np->add_perfdata( label => "Uptime", value => $red_connected_since_min, uom => "min" );
+            $np->add_perfdata( label => "Uptime", value => getREDuptime(), uom => "min" );
         } elsif ($red_status eq 0) { # offline
             $result = CRITICAL;
             $np->nagios_exit( CRITICAL, "unable to connect to RED - offline since $uptime");
         } elsif ($red_status eq "offline") {
             $red_ip = '';
             # adv. tests 
-            # RED_ID,RED_IP =  ps ax | grep A310020319C74C1| grep -v "grep" | grep -Eo '([A-Z0-9]{10,15})|([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})'
+            # RED_ID,RED_IP =  ps ax | grep A310xx | grep -v "grep" | grep -Eo '([A-Z0-9]{10,15})|([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})'
             $red_ip = `ssh -q -o StrictHostKeyChecking=$use_scp_option_StrictHostKeyChecking -p $host_port loginuser\@$host ps ax | grep $red_id | grep -Eo '([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3})'`;
             if ($red_ip =~ m/^([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+|[a-zA-Z][-a-zA-Z0-9]+(\.[a-zA-Z][-a-zA-Z0-9]+)*)$/) {
                 $result = OK;
-                $np->add_perfdata( label => "Uptime", value => $red_connected_since_min, uom => "min" );
+                $np->add_perfdata( label => "Uptime", value => getREDuptime(), uom => "min" );
             } else {
                 $result = CRITICAL;
             }
@@ -213,10 +204,30 @@ if (length($cmd_scp) =~ 0 or $cmd_scp =~ /Warning: Permanently added/ or $cmd_sc
    $np->nagios_exit( CRITICAL, "unable to connect to firewall or file not found");
 }
 
-
 alarm(0);
 
-$np->nagios_exit( $result, "RED unable to connect to RED - offline since $uptime");
+$np->nagios_exit( $result, "RED connectet via $red_uplink, last contact was $red_lping");
+
+sub getREDuptime {
+    my @red_time = '';
+    my @red_time_day  = '';
+    $red_uptime = `ssh -q -o StrictHostKeyChecking=$use_scp_option_StrictHostKeyChecking -p $host_port loginuser\@$host ps axo '%p%t%a' | grep $red_id | grep -Eo '([0-9]{0,2}-?[0-9]{1,2}:[0-9]{1,2}:[0-9]{1,2})'`;
+    if ($red_uptime =~ /-/) {
+        @red_time_day = split(/-/,$red_uptime);
+        @red_time = split(/:/,$red_time_day[1]);
+        if ($red_time_day[0] gt 0) {
+            $red_time[0] += $red_time_day[0]*24;
+        }
+    } else {
+        @red_time = split(/:/,$red_uptime);
+    }
+    if (length($red_uptime) gt 0 and $red_time[0] gt 0 ) {
+        $red_time[1] += $red_time[0]*60;
+    } else {
+        $red_time[1] = 0;
+    }
+    return $red_time[1];
+}
 
 =head1 AUTHOR
 
@@ -248,7 +259,8 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
 
 =head1 HISTORY
 
-V1.1e/2014-02-01 added adv checks for red online state; apadted changes on red config
+V1.1f/2014-02-01 fixed uptime calculation and some bugs, tested with version 9.106-17
+V1.1e/2013-11-11 added adv checks for red online state; apadted changes on red config
 V1.1d/2013-30-09 added option to change ssh port
 V1.1c/2013-07-08 bugifx release, after update to version 9.103-5 installation offline reds were shown as online
 V1.1b/2013-27-05 update release, supports now version 9.1
