@@ -54,8 +54,8 @@ You need to gennerate a key pair for the nagios user in order to use the passwor
 This can be done by running ssh-keygen -t rsa -N "" as nagios user or su - nagios -c 'ssh-keygen -t rsa -N "" '.
 The public key needs to configured on the firewall for the loginuser.
 
- ASG <  version 8: the key must be manually add to the authorized_keys file
- ASG >= version 8: the key can be set in the webinterface
+ UTM <  version 8: the key must be manually add to the authorized_keys file
+ UTM >= version 8: the key can be set in the webinterface
 
 =back
 
@@ -94,7 +94,7 @@ my $red_uplink = '';
 my $red_lping = '';
 
 my $result = UNKNOWN;
-my $version = 'V1.1d/2013-30-09/dm';
+my $version = 'V1.1e/2014-02-01/dm';
 my $printversion = 0;
 my $verbose = 0;
 my $help = 0;
@@ -186,9 +186,23 @@ if (length($cmd_scp) =~ 0 or $cmd_scp =~ /Warning: Permanently added/ or $cmd_sc
 
          `rm -rf $tmpdir/red_state_$red_id`;
          
-        if ($red_status == 1) {
+        if ($red_status eq "online") {
             $result = OK;
             $np->add_perfdata( label => "Uptime", value => $red_connected_since_min, uom => "min" );
+        } elsif ($red_status eq 0) { # offline
+            $result = CRITICAL;
+            $np->nagios_exit( CRITICAL, "unable to connect to RED - offline since $uptime");
+        } elsif ($red_status eq "offline") {
+            $red_ip = '';
+            # adv. tests 
+            # RED_ID,RED_IP =  ps ax | grep A310020319C74C1| grep -v "grep" | grep -Eo '([A-Z0-9]{10,15})|([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})'
+            $red_ip = `ssh -q -o StrictHostKeyChecking=$use_scp_option_StrictHostKeyChecking -p $host_port loginuser\@$host ps ax | grep $red_id | grep -Eo '([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3})'`;
+            if ($red_ip =~ m/^([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+|[a-zA-Z][-a-zA-Z0-9]+(\.[a-zA-Z][-a-zA-Z0-9]+)*)$/) {
+                $result = OK;
+                $np->add_perfdata( label => "Uptime", value => $red_connected_since_min, uom => "min" );
+            } else {
+                $result = CRITICAL;
+            }
         }
       } else { # offline
         `rm -rf $tmpdir/red_state_$red_id`;
@@ -202,7 +216,7 @@ if (length($cmd_scp) =~ 0 or $cmd_scp =~ /Warning: Permanently added/ or $cmd_sc
 
 alarm(0);
 
-$np->nagios_exit( $result, "RED connected from $red_ip, uptime $uptime");
+$np->nagios_exit( $result, "RED unable to connect to RED - offline since $uptime");
 
 =head1 AUTHOR
 
@@ -234,6 +248,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
 
 =head1 HISTORY
 
+V1.1e/2014-02-01 added adv checks for red online state; apadted changes on red config
 V1.1d/2013-30-09 added option to change ssh port
 V1.1c/2013-07-08 bugifx release, after update to version 9.103-5 installation offline reds were shown as online
 V1.1b/2013-27-05 update release, supports now version 9.1
