@@ -56,6 +56,9 @@ The public key needs to configured on the firewall for the loginuser.
 
  UTM <  version 8: the key must be manually add to the authorized_keys file
  UTM >= version 8: the key can be set in the webinterface
+ 
+ !! For UTM >= 9.2 a new perl module must be installed !!
+ On Debian install libjson-perl and libjson-xs-perl
 
 =back
 
@@ -95,7 +98,7 @@ my $red_uplink = '';
 my $red_lping = '';
 
 my $result = UNKNOWN;
-my $version = 'V1.1f/2014-02-01/dm';
+my $version = 'V1.1g/2014-25-03/dm';
 my $printversion = 0;
 my $verbose = 0;
 my $help = 0;
@@ -164,15 +167,33 @@ if (length($cmd_scp) =~ 0 or $cmd_scp =~ /Warning: Permanently added/ or $cmd_sc
    
    if (($line !~ /cannot access/i) and ($line !~ /No such file or directory/i)) {
       if (`ls -s $tmpdir/red_state_$red_id` !~ /^0/i) { # file found
-         my $hashref;
-         $hashref = retrieve("$tmpdir/red_state_$red_id");
-         $red_ip = $hashref->{'peer'};
-         $red_status = $hashref->{'status'};
-         $red_uplink = $hashref->{'uplink'};
-         if (length($red_uplink) eq 0) {
-            $red_uplink = "#";
+         if ($cmd_get_version < 9.2) {
+             my $hashref;
+             $hashref = retrieve("$tmpdir/red_state_$red_id");
+             $red_ip = $hashref->{'peer'};
+             $red_status = $hashref->{'status'};
+             $red_uplink = $hashref->{'uplink'};
+
+             $red_lping = localtime($hashref->{'lastping'});
+         } elsif ($cmd_get_version > 9.2) {
+             use JSON;
+             my $json;
+             {
+               local $/; #Enable 'slurp' mode
+               open my $fh, "<", "$tmpdir/red_state_$red_id";
+               $json = <$fh>;
+               close $fh;
+             }
+             my $data = decode_json($json);
+             $red_ip = $data->{'peer'};
+             $red_status = $data->{'status'};
+             $red_uplink = $data->{'uplink'};
+
+             $red_lping = localtime($data->{'lastping'});
          }
-         $red_lping = localtime($hashref->{'lastping'});
+         if (length($red_uplink) eq 0) {
+             $red_uplink = "#";
+         }
          print " RED connectet via $red_uplink, last contact was $red_lping\n" if ($verbose);
 
          `rm -rf $tmpdir/red_state_$red_id`;
@@ -259,6 +280,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
 
 =head1 HISTORY
 
+V1.1g/2014-25-03 update release, supports now version 9.2, perl json module required
 V1.1f/2014-02-01 fixed uptime calculation and some bugs, tested with version 9.106-17
 V1.1e/2013-11-11 added adv checks for red online state; apadted changes on red config
 V1.1d/2013-30-09 added option to change ssh port
