@@ -4,7 +4,7 @@
 
 =head1 NAME
 
-check_utm_red_state - Nagios plugin for checking Astaro RED Device state
+check_utm_red_state - PRTG plugin for checking Sophos RED Device state
 
 =head1 SYNOPSIS
 
@@ -68,15 +68,14 @@ use strict;
 use warnings;
 use FindBin;
 use lib "$FindBin::Bin/../perl/lib";
-use Nagios::Plugin;
 use Getopt::Long qw(:config no_ignore_case bundling);
 use Pod::Usage;
 use Storable;
 use Time::Local;
 use POSIX qw/floor/;
+use Switch;
 
 my $name = "RED STATE";
-my $np = Nagios::Plugin->new( shortname => $name);
 my $host = '';
 my $host_port = 22;
 my $tmpdir = '/tmp';
@@ -97,8 +96,15 @@ my $red_status = '';
 my $red_uplink = '';
 my $red_lping = '';
 
+use constant {
+    OK => 0,
+    WARNING => 1,
+    ERROR => 2,
+    UNKNOWN => 2,
+};
+
 my $result = UNKNOWN;
-my $version = 'V1.1g/2014-25-03/dm';
+my $version = 'V1.1h/2014-23-08/dm';
 my $printversion = 0;
 my $verbose = 0;
 my $help = 0;
@@ -139,7 +145,7 @@ pod2usage(-msg     => "*** no host/RED ID specified ***",
 
 # -- Alarm
 
-$SIG{ALRM} = sub { $np->nagios_die("Timeout reached"); }; 
+$SIG{ALRM} = sub { prtg_exit("ERROR", "Timeout reached"); }; 
 alarm($timeout);
 
 # -- main
@@ -147,7 +153,7 @@ alarm($timeout);
 $host = $1 if ($host && $host =~ m/^([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+|[a-zA-Z][-a-zA-Z0-9]+(\.[a-zA-Z][-a-zA-Z0-9]+)*)$/);
 unless ($host) {
    print "No target host specified\n";
-   $np->nagios_exit( CRITICAL, "Failure in hostname or IP");
+   prtg_exit("ERROR", "No target host specified\n");
 }
 
 # -- check asg/utm version
@@ -199,35 +205,51 @@ if (length($cmd_scp) =~ 0 or $cmd_scp =~ /Warning: Permanently added/ or $cmd_sc
          `rm -rf $tmpdir/red_state_$red_id`;
          
         if ($red_status eq "online") {
-            $result = OK;
-            $np->add_perfdata( label => "Uptime", value => getREDuptime(), uom => "min" );
+            $result = "OK";
         } elsif ($red_status eq 0) { # offline
-            $result = CRITICAL;
-            $np->nagios_exit( CRITICAL, "unable to connect to RED - offline since $uptime");
+            $result = "ERROR";
+            prtg_exit($result, "unable to connect to RED - offline since $uptime");
         } elsif ($red_status eq "offline") {
             $red_ip = '';
             # adv. tests 
-            # RED_ID,RED_IP =  ps ax | grep A310xx | grep -v "grep" | grep -Eo '([A-Z0-9]{10,15})|([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})'
             $red_ip = `ssh -q -o StrictHostKeyChecking=$use_scp_option_StrictHostKeyChecking -p $host_port loginuser\@$host ps ax | grep $red_id | grep -Eo '([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3})'`;
             if ($red_ip =~ m/^([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+|[a-zA-Z][-a-zA-Z0-9]+(\.[a-zA-Z][-a-zA-Z0-9]+)*)$/) {
-                $result = OK;
-                $np->add_perfdata( label => "Uptime", value => getREDuptime(), uom => "min" );
+                $result = "OK";
             } else {
-                $result = CRITICAL;
+                $result = "ERROR";
             }
         }
       } else { # offline
         `rm -rf $tmpdir/red_state_$red_id`;
-        $np->nagios_exit( CRITICAL, "unable to connect to RED - offline since $uptime");
+        prtg_exit("ERROR", "unable to connect to RED - offline since $uptime");
       }
    }
 } else {
-   $np->nagios_exit( CRITICAL, "unable to connect to firewall or file not found");
+   prtg_exit("ERROR", "unable to connect to firewall or file not found");
 }
 
 alarm(0);
 
-$np->nagios_exit( $result, "RED connectet via $red_uplink, last contact was $red_lping");
+prtg_exit($result, "RED connectet via $red_uplink, last contact was $red_lping");
+
+sub prtg_exit {
+    my $state = $_[0];
+    my $descr = $_[1];
+    switch ($state) {
+        case "OK" {
+            print "0:0:$state - $descr\n";
+            exit 0;
+            }
+        case "WARNING" {
+            print "1:1:$state - $descr\n";
+            exit 1;
+            }
+        else { #ERROR
+            print "2:2:$state - $descr\n";
+            exit 2;
+            }
+    }
+}
 
 sub getREDuptime {
     my @red_time = '';
@@ -280,6 +302,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
 
 =head1 HISTORY
 
+V1.1h/2014-23-08 first prtg fork
 V1.1g/2014-25-03 update release, supports now version 9.2, perl json module required
 V1.1f/2014-02-01 fixed uptime calculation and some bugs, tested with version 9.106-17
 V1.1e/2013-11-11 added adv checks for red online state; apadted changes on red config
