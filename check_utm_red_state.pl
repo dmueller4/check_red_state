@@ -4,7 +4,7 @@
 
 =head1 NAME
 
-check_utm_red_state - Nagios plugin for checking Astaro RED Device state
+check_utm_red_state - Nagios plugin for checking Sophos RED Device state
 
 =head1 SYNOPSIS
 
@@ -98,7 +98,7 @@ my $red_uplink = '';
 my $red_lping = '';
 
 my $result = UNKNOWN;
-my $version = 'V1.1g/2014-25-03/dm';
+my $version = 'V1.1i/2015-13-09/dm';
 my $printversion = 0;
 my $verbose = 0;
 my $help = 0;
@@ -152,9 +152,17 @@ unless ($host) {
 
 # -- check asg/utm version
 $cmd_get_version = `ssh -q -o StrictHostKeyChecking=$use_scp_option_StrictHostKeyChecking -p $host_port loginuser\@$host cat /etc/version`;
+if (length($cmd_get_version) eq 0) {
+    print " connect to firewall ($host) failed \n";
+    print " check if ssh key is in place in both systems\n" if ($verbose);
+    print "error: ",`ssh  -o StrictHostKeyChecking=$use_scp_option_StrictHostKeyChecking -p $host_port loginuser\@$host cat /etc/version 2>&1` if ($verbose);
+    $np->nagios_exit( CRITICAL, "Failed to connect to host");
+}
+print " connect to firewall ($host) successful \n" if ($verbose);
 if ($cmd_get_version > 9.1) {
 	$cmd_rpath = 'tmp/red/server';
 }
+print " detected UTM servion: $cmd_get_version\n" if ($verbose);
 
 $cmd_scp = `LANG=C scp -p -o StrictHostKeyChecking=$use_scp_option_StrictHostKeyChecking -P $host_port loginuser\@$host:/var/sec/chroot-httpd/$cmd_rpath/red_state_$red_id $tmpdir/ 2>&1 `;
 
@@ -280,6 +288,8 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
 
 =head1 HISTORY
 
+V1.1i/2015-13-09 bugfix release, more connection error handling
+V1.1h/2014-23-08 first prtg fork
 V1.1g/2014-25-03 update release, supports now version 9.2, perl json module required
 V1.1f/2014-02-01 fixed uptime calculation and some bugs, tested with version 9.106-17
 V1.1e/2013-11-11 added adv checks for red online state; apadted changes on red config
