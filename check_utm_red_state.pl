@@ -4,7 +4,7 @@
 
 =head1 NAME
 
-check_utm_red_state - PRTG plugin for checking Sophos RED Device state
+check_utm_red_state - Icinga plugin for checking Sophos RED Device state
 
 =head1 SYNOPSIS
 
@@ -96,14 +96,9 @@ my $red_status = '';
 my $red_uplink = '';
 my $red_lping = '';
 
-use constant {
-    OK => 0,
-    WARNING => 1,
-    ERROR => 2,
-    UNKNOWN => 2,
-};
+my %ERRORS=('OK'=>0,'WARNING'=>1,'CRITICAL'=>2,'UNKNOWN'=>3,'DEPENDENT'=>4);
 
-my $result = UNKNOWN;
+my $result = 'UNKNOWN';
 my $version = 'V1.1i/2015-13-09/dm';
 my $printversion = 0;
 my $verbose = 0;
@@ -111,7 +106,6 @@ my $help = 0;
 my $timeout = 10;
 my $debug = 0;
 my $uptime = "";
-
 
 # -- GetOpt
 GetOptions(
@@ -124,28 +118,28 @@ GetOptions(
    "V|version"      => \$printversion,
    "v|verbose+"     => \$verbose,
    "d|debug:+"      => \$debug,
-) or pod2usage({ -exitval => UNKNOWN,
+) or pod2usage({ -exitval => 3,
                  -verbose => 0,
                  -msg     => "*** unknown argument found ***" });
 
 pod2usage(-verbose => 1,
-          -exitval => UNKNOWN,
-     -output  => \*STDOUT,
+          -exitval => 3,
+     -output  => \*STDERR,
          ) if ( $help );
 
 pod2usage(-msg     => "\n$0 -- version: $version\n",
           -verbose => 0,
-          -exitval => UNKNOWN,
+          -exitval => 3,
          ) if ( $printversion );
 
 pod2usage(-msg     => "*** no host/RED ID specified ***",
           -verbose => 0,
-          -exitval => UNKNOWN,
+          -exitval => 3,
          ) unless $red_id;
 
 # -- Alarm
 
-$SIG{ALRM} = sub { prtg_exit("ERROR", "Timeout reached"); }; 
+$SIG{ALRM} = sub { &icinga_exit('CRITICAL', "Timeout reached"); }; 
 alarm($timeout);
 
 # -- main
@@ -153,7 +147,7 @@ alarm($timeout);
 $host = $1 if ($host && $host =~ m/^([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+|[a-zA-Z][-a-zA-Z0-9]+(\.[a-zA-Z][-a-zA-Z0-9]+)*)$/);
 unless ($host) {
    print "No target host specified\n";
-   prtg_exit("ERROR", "No target host specified\n");
+   &icinga_exit('CRITICAL', "No target host specified\n");
 }
 
 # -- check asg/utm version
@@ -162,7 +156,7 @@ if (length($cmd_get_version) eq 0) {
     print " connect to firewall ($host) failed \n";
     print " check if ssh key is in place in both systems\n" if ($verbose);
     print "error: ",`ssh  -o StrictHostKeyChecking=$use_scp_option_StrictHostKeyChecking -p $host_port loginuser\@$host cat /etc/version 2>&1` if ($verbose);
-    prtg_exit("ERROR", "Failed to connect to host\n");
+    &icinga_exit('CRITICAL', "Failed to connect to host\n");
 }
 print " connect to firewall ($host) successful \n" if ($verbose);
 if ($cmd_get_version > 9.1) {
@@ -208,76 +202,44 @@ if (length($cmd_scp) =~ 0 or $cmd_scp =~ /Warning: Permanently added/ or $cmd_sc
          if (length($red_uplink) eq 0) {
              $red_uplink = "#";
          }
-         print " RED connectet via $red_uplink, last contact was $red_lping\n" if ($verbose);
+         print " RED connected via $red_uplink, last contact was $red_lping\n" if ($verbose);
 
          `rm -rf $tmpdir/red_state_$red_id`;
          
         if ($red_status eq "online") {
-            $result = "OK";
+            $result = 'OK';
         } elsif ($red_status eq 0) { # offline
-            $result = "ERROR";
-            prtg_exit($result, "unable to connect to RED - offline since $uptime");
+            $result = 'CRITICAL';
+            &icinga_exit($result, "unable to connect to RED - offline since $uptime");
         } elsif ($red_status eq "offline") {
             $red_ip = '';
             # adv. tests 
             $red_ip = `ssh -q -o StrictHostKeyChecking=$use_scp_option_StrictHostKeyChecking -p $host_port loginuser\@$host ps ax | grep $red_id | grep -Eo '([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3})'`;
             if ($red_ip =~ m/^([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+|[a-zA-Z][-a-zA-Z0-9]+(\.[a-zA-Z][-a-zA-Z0-9]+)*)$/) {
-                $result = "OK";
+                $result = 'OK';
             } else {
-                $result = "ERROR";
+                $result = 'CRITICAL';
             }
         }
       } else { # offline
         `rm -rf $tmpdir/red_state_$red_id`;
-        prtg_exit("ERROR", "unable to connect to RED - offline since $uptime");
+        &icinga_exit('CRITICAL', "unable to connect to RED - offline since $uptime");
       }
    }
 } else {
-   prtg_exit("ERROR", "unable to connect to firewall or file not found");
+   &icinga_exit('CRITICAL', "unable to connect to firewall or file not found");
 }
 
 alarm(0);
 
-prtg_exit($result, "RED connectet via $red_uplink, last contact was $red_lping");
+&icinga_exit($result, "RED connected via $red_uplink, last contact was $red_lping");
 
-sub prtg_exit {
-    my $state = $_[0];
-    my $descr = $_[1];
-    switch ($state) {
-        case "OK" {
-            print "0:0:$state - $descr\n";
-            exit 0;
-            }
-        case "WARNING" {
-            print "1:1:$state - $descr\n";
-            exit 1;
-            }
-        else { #ERROR
-            print "2:2:$state - $descr\n";
-            exit 2;
-            }
-    }
-}
+sub icinga_exit() {
+    my $state = shift;
+    my $descr = shift;
 
-sub getREDuptime {
-    my @red_time = '';
-    my @red_time_day  = '';
-    $red_uptime = `ssh -q -o StrictHostKeyChecking=$use_scp_option_StrictHostKeyChecking -p $host_port loginuser\@$host ps axo '%p%t%a' | grep $red_id | grep -Eo '([0-9]{0,2}-?[0-9]{1,2}:[0-9]{1,2}:[0-9]{1,2})'`;
-    if ($red_uptime =~ /-/) {
-        @red_time_day = split(/-/,$red_uptime);
-        @red_time = split(/:/,$red_time_day[1]);
-        if ($red_time_day[0] gt 0) {
-            $red_time[0] += $red_time_day[0]*24;
-        }
-    } else {
-        @red_time = split(/:/,$red_uptime);
-    }
-    if (length($red_uptime) gt 0 and $red_time[0] gt 0 ) {
-        $red_time[1] += $red_time[0]*60;
-    } else {
-        $red_time[1] = 0;
-    }
-    return $red_time[1];
+    print "RED $state - $descr";
+    exit $ERRORS{$state};
 }
 
 =head1 AUTHOR
@@ -323,3 +285,5 @@ V1.1/2011-30-08 minor bugfixes, changed default value for StrictHostKeyChecking 
 V1.0/2011-01-06 inital version
 
 =cut
+
+__END__
