@@ -95,17 +95,20 @@ my $red_connected_since_min = 0;
 my $red_status = '';
 my $red_uplink = '';
 my $red_lping = '';
+my $red_signal_strength = '';
+my $red_linkstate = '';
 
 my %ERRORS=('OK'=>0,'WARNING'=>1,'CRITICAL'=>2,'UNKNOWN'=>3,'DEPENDENT'=>4);
 
 my $result = 'UNKNOWN';
-my $version = 'V1.1i/2015-13-09/dm';
+my $version = 'V1.1j/2017-03-07/dm';
 my $printversion = 0;
 my $verbose = 0;
 my $help = 0;
 my $timeout = 10;
 my $debug = 0;
 my $uptime = "";
+my $error = 0;
 
 # -- GetOpt
 GetOptions(
@@ -117,7 +120,7 @@ GetOptions(
    "h|help"         => \$help,
    "V|version"      => \$printversion,
    "v|verbose+"     => \$verbose,
-   "d|debug:+"      => \$debug,
+   "d|debug+"       => \$debug,
 ) or pod2usage({ -exitval => 3,
                  -verbose => 0,
                  -msg     => "*** unknown argument found ***" });
@@ -136,11 +139,30 @@ pod2usage(-msg     => "*** no host/RED ID specified ***",
           -verbose => 0,
           -exitval => 3,
          ) unless $red_id;
+if ($debug) { $verbose++} # if debug sete verbose to
 
 # -- Alarm
-
 $SIG{ALRM} = sub { &icinga_exit('CRITICAL', "Timeout reached"); }; 
 alarm($timeout);
+
+# -- Test if executable are available
+unless (-f "/usr/bin/stat") {
+    print "Error program stat not found in path: /usr/bin/stat \n"; $error++;
+}
+print "> found programm stat \n" if ($debug);
+unless (-f "/usr/bin/scp") {
+    print "Error program scp not found in path: /usr/bin/scp \n";$error++;
+}
+print "> found programm scp \n" if ($debug);
+unless (-f "/usr/bin/ssh") {
+    print "Error program ssh not found in path: /usr/bin/ssh \n";$error++;
+}
+print "> found programm ssh \n" if ($debug);
+unless (-f "/bin/ls") {
+    print "Error program ls not found in path: /bin/ls \n";$error++;
+}
+print "> found programm ls \n" if ($debug);
+if ($error > 0) { exit(1); }
 
 # -- main
 
@@ -162,19 +184,26 @@ print " connect to firewall ($host) successful \n" if ($verbose);
 if ($cmd_get_version > 9.1) {
 	$cmd_rpath = 'tmp/red/server';
 }
-print " detected UTM servion: $cmd_get_version\n" if ($verbose);
+print " detected UTM version: $cmd_get_version\n" if ($verbose);
 
 $cmd_scp = `LANG=C scp -p -o StrictHostKeyChecking=$use_scp_option_StrictHostKeyChecking -P $host_port loginuser\@$host:/var/sec/chroot-httpd/$cmd_rpath/red_state_$red_id $tmpdir/ 2>&1 `;
+print "> get command return state: $cmd_scp \n" if ($debug>1);
+print "> collect data command return:" if ($debug);
+print " OK \n" if ($debug and length($cmd_scp) =~0);
 
 if (length($cmd_scp) =~ 0 or $cmd_scp =~ /Warning: Permanently added/ or $cmd_scp =~ /WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!/ ) {
-   print " connect to firewall ($host) successful \n" if ($verbose);
+   print " Tolerated  - check Warnings in SSH connection \n" if ($debug and length($cmd_scp) !~0);
+   print " collect data from ($host) successful \n" if ($verbose);
    $line = `ls -l $tmpdir/red_state_$red_id --time-style=long-iso 2>&1`;
    ($line_time) = $line =~ /([0-9]{2}:[0-9]{2})/;
    ($line_date) = $line =~ /([0-9]{4}-[0-9]{2}-[0-9]{2})/;
    print " file info $tmpdir/red_state_$red_id  time: $line_time  date: $line_date\n" if ($verbose);
-   
-   if (($line !~ /cannot access/i) and ($line !~ /No such file or directory/i)) {
-      if (`ls -s $tmpdir/red_state_$red_id` !~ /^0/i) { # file found
+   print "> line: $line " if ($debug >1);
+   print "> file found .." if ($debug); 
+   if (($line !~ /cannot access/i) and ($line !~ /No such file or directory/i)) { # file found
+      print " OK \n> file size .." if ($debug);
+      if (`LANG=C stat  $tmpdir/red_state_$red_id --format="\%s"` !~ /^0/i) { # file size ok
+         print "OK \n" if ($debug);
          if ($cmd_get_version < 9.2) {
              my $hashref;
              $hashref = retrieve("$tmpdir/red_state_$red_id");
@@ -196,14 +225,18 @@ if (length($cmd_scp) =~ 0 or $cmd_scp =~ /Warning: Permanently added/ or $cmd_sc
              $red_ip = $data->{'peer'};
              $red_status = $data->{'status'};
              $red_uplink = $data->{'uplink'};
+             $red_linkstate = $data->{'linkstate'};
+             $red_signal_strength = $data->{'signal_strength'};
 
              $red_lping = localtime($data->{'lastping'});
          }
          if (length($red_uplink) eq 0) {
              $red_uplink = "#";
          }
-         print " RED connected via $red_uplink, last contact was $red_lping\n" if ($verbose);
-
+         print " RED info: local interface $red_uplink, remote IP $red_ip, last contact was $red_lping\n" if ($verbose);
+         if ($red_linkstate or ($red_signal_strength !~ /N\/A/))  {
+            print " Link state: $red_linkstate, WIFI signal strength: $red_signal_strength \n" if ($debug);
+         }
          `rm -rf $tmpdir/red_state_$red_id`;
          
         if ($red_status eq "online") {
@@ -212,6 +245,7 @@ if (length($cmd_scp) =~ 0 or $cmd_scp =~ /Warning: Permanently added/ or $cmd_sc
             $result = 'CRITICAL';
             &icinga_exit($result, "unable to connect to RED - offline since $uptime");
         } elsif ($red_status eq "offline") {
+            my $red_oldip = $red_ip;
             $red_ip = '';
             # adv. tests 
             $red_ip = `ssh -q -o StrictHostKeyChecking=$use_scp_option_StrictHostKeyChecking -p $host_port loginuser\@$host ps ax | grep $red_id | grep -Eo '([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3})'`;
@@ -219,20 +253,31 @@ if (length($cmd_scp) =~ 0 or $cmd_scp =~ /Warning: Permanently added/ or $cmd_sc
                 $result = 'OK';
             } else {
                 $result = 'CRITICAL';
+                if ($red_oldip) {
+                    &icinga_exit('CRITICAL',  "unable to connect to RED, last IP $red_oldip - offline");
+                }else {
+                    &icinga_exit('CRITICAL',  "unable to connect to RED - offline");
+                }
             }
         }
       } else { # offline
+        print " ERROR - size is zero; empty file \n" if ($debug); 
         `rm -rf $tmpdir/red_state_$red_id`;
         &icinga_exit('CRITICAL', "unable to connect to RED - offline since $uptime");
       }
+   } else { # no access or file not found on local machine
+       print " ERROR - no access or file not found on local machine \n" if ($debug); 
    }
 } else {
-   &icinga_exit('CRITICAL', "unable to connect to firewall or file not found");
+   if (length($cmd_scp) > 0) {
+      &icinga_exit('CRITICAL', "data collection for RED ID failed, file not found");
+   }
+   &icinga_exit('CRITICAL', "unable to connect to firewall");
 }
 
 alarm(0);
 
-&icinga_exit($result, "RED connected via $red_uplink, last contact was $red_lping");
+&icinga_exit($result, "RED connected to $red_uplink from $red_ip, last contact was $red_lping");
 
 sub icinga_exit() {
     my $state = shift;
@@ -272,6 +317,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
 
 =head1 HISTORY
 
+V1.1j/2017-03-07 better error handling, tested with 9.5
 V1.1i/2015-13-09 bugfix release, more connection error handling
 V1.1h/2014-23-08 first prtg fork
 V1.1g/2014-25-03 update release, supports now version 9.2, perl json module required
